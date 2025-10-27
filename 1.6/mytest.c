@@ -15,25 +15,41 @@ static void *worker_join(void *arg) {
 
 static void *worker_detach(void *arg) {
     (void)arg;
-    sleep(5);
-    write(1, "detached thr: done\n", 22);
+    write(1, "detached thr 1: done\n", 21);
+    return NULL;
+}
+
+static void *worker_detach_2(void *arg) {
+    (void)arg;
+    sleep(7);
+    write(1, "detached thr 2: done\n", 21);
     return NULL;
 }
 
 int main(void) {
-    mythread_t tj, td;
+    mythread_t tj, td, td2;
     void *ret = NULL;
 
     if (mythread_create(&tj, worker_join, (void*)(intptr_t)5)) {
         fprintf(stderr, "create(join): %s\n", strerror(errno));
         return 1;
     }
+
     if (mythread_create(&td, worker_detach, NULL)) {
         fprintf(stderr, "create(detach): %s\n", strerror(errno));
         return 1;
     }
     if (mythread_detach(&td)) {
-        fprintf(stderr, "detach: %s\n", strerror(errno));
+        fprintf(stderr, "detach 1: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (mythread_create(&td2, worker_detach_2, NULL)) {
+        fprintf(stderr, "create(detach): %s\n", strerror(errno));
+        return 1;
+    }
+    if (mythread_detach(&td2)) {
+        fprintf(stderr, "detach 2: %s\n", strerror(errno));
         return 1;
     }
 
@@ -42,6 +58,8 @@ int main(void) {
         return 1;
     }
     printf("join ret val = %d\n", (int)(intptr_t)ret);
+
+    sleep(2);
 
     syscall(SYS_exit, 0);
 }

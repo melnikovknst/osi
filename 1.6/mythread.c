@@ -161,6 +161,7 @@ static int cleaner(void *arg) {
     while (1) {
         lock_acq(&cleaner_struct.lock);
         if (cleaner_struct.head == NULL && atomic_load_explicit(&active_threads, memory_order_relaxed) == 0) {
+            cleaner_struct.init = 0;
             lock_rel(&cleaner_struct.lock);
             syscall(SYS_exit, 0);
         }
@@ -181,19 +182,22 @@ static int cleaner(void *arg) {
             free(w);
         }
         lock_rel(&cleaner_struct.lock);
+        usleep(1000);
     }
     return -1;
 }
 
 static int cleaner_start(void) {
-    if (cleaner_struct.init)
+    if (!__sync_bool_compare_and_swap(&cleaner_struct.init, 0, 1))
         return 0;
 
     cleaner_struct.stack_sz = 1 << 20;
     cleaner_struct.stack = mmap(NULL, cleaner_struct.stack_sz, PROT_READ | PROT_WRITE, 
         MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
-    if (cleaner_struct.stack == MAP_FAILED)
+    if (cleaner_struct.stack == MAP_FAILED) {
+        cleaner_struct.init = 0;
         return -1;
+    }
 
     int flags = CLONE_VM | CLONE_FS | CLONE_FILES |
                 CLONE_SIGHAND | CLONE_SYSVSEM | CLONE_THREAD;
@@ -203,13 +207,14 @@ static int cleaner_start(void) {
     if (tid == -1) {
         int e = errno;
         munmap(cleaner_struct.stack, cleaner_struct.stack_sz);
+        cleaner_struct.init = 0;
         errno = e;
         return -1;
     }
     cleaner_struct.tid = tid;
-    cleaner_struct.init = 1;
     return 0;
 }
+
 
 int mythread_detach(mythread_t *thr) {
     if (!thr) {
