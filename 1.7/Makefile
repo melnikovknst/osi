@@ -3,11 +3,11 @@ CFLAGS  := -O2 -Wall -Wextra
 AR      := ar
 RANLIB  := ranlib
 
-LIB     := libmythread.a
-LIB_OBJS:= mythread.o
+LIB     := libuthread.a
+LIB_OBJS:= uthread.o
 
-MAIN    := mytest      
-MAIN_SRC:= mytest.c    
+MAIN    := utest      
+MAIN_SRC:= utest.c    
 
 .PHONY: all clean run
 
@@ -17,11 +17,11 @@ $(LIB): $(LIB_OBJS)
 	$(AR) rcs $@ $^
 	$(RANLIB) $@
 
-mythread.o: mythread.c mythread.h
+uthread.o: uthread.c uthread.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(MAIN): $(MAIN_SRC) $(LIB) mythread.h
-	$(CC) $(CFLAGS) $(MAIN_SRC) -L. -lmythread -o $@
+$(MAIN): $(MAIN_SRC) $(LIB) uthread.h
+	$(CC) $(CFLAGS) $(MAIN_SRC) -L. -luthread -o $@
 
 run: all
 	./$(MAIN)
