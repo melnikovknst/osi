@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <stdio.h>
 
 static _Atomic int active_threads = 0;
 
@@ -45,7 +46,7 @@ static int tramp(void *p) {
         rv = sp->fn(sp->arg);
 
     if (sp && sp->ret_slot)
-        *sp->ret_slot = rv;
+       *sp->ret_slot = rv;
 
     atomic_fetch_sub_explicit(&active_threads, 1, memory_order_relaxed);
 
@@ -73,7 +74,7 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
         errno = e;
         return -1;
     }
-    *ctid = 0;
+    *ctid = 1;
 
     struct start_pack *sp = (struct start_pack*)malloc(sizeof *sp);
     if (!sp) {
@@ -87,9 +88,16 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
     sp->arg = arg;
     sp->ret_slot = &thr->retval;
 
+    thr->stack = stk;
+    thr->stack_sz = stk_sz;
+    thr->ctid = ctid;
+    thr->detached = 0;
+    thr->pack = sp;
+    thr->retval = NULL;
+
     int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND
               | CLONE_SYSVSEM | CLONE_THREAD
-              | CLONE_CHILD_CLEARTID | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID;
+              | CLONE_CHILD_CLEARTID | CLONE_PARENT_SETTID;
 
     int tid = clone(tramp, (char*)stk + stk_sz, flags, sp, &thr->tid, NULL, ctid);
 
@@ -101,15 +109,6 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
         errno = e;
         return -1;
     }
-
-    *ctid = tid;
-    thr->tid = tid;
-    thr->stack = stk;
-    thr->stack_sz = stk_sz;
-    thr->ctid = ctid;
-    thr->detached = 0;
-    thr->pack = sp;
-    thr->retval = NULL;
 
     atomic_fetch_add_explicit(&active_threads, 1, memory_order_relaxed);
 
@@ -126,8 +125,9 @@ int mythread_join(mythread_t *thr, void **retval) {
         if (v == 0) break;
         syscall(SYS_futex, thr->ctid, FUTEX_WAIT, v, NULL, NULL, 0);
     }
+
     if (retval)
-        *retval = thr->retval;
+       *retval = thr->retval;
 
     munmap(thr->stack, thr->stack_sz);
     free(thr->ctid);
