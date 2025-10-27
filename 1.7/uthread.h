@@ -1,20 +1,23 @@
-#ifndef MYTHREAD_H
-#define MYTHREAD_H
+#ifndef UTHREAD_H
+#define UTHREAD_H
 #include <sys/types.h>
 #include <stddef.h>
+#include <ucontext.h>
 
-typedef struct {
-    int      tid;
-    void    *stack;
-    size_t   stack_sz;
-    int     *ctid;
-    int      detached;
-    void    *pack;
-    void    *retval;
-} mythread_t;
+typedef struct uthread {
+	ucontext_t ctx;
+	void *stack;
+	size_t stack_sz;
+	int finished;
+	void *retval;
+	int joined;
+	struct uthread *next;
+} uthread_t;
 
-int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg);
-int mythread_join(mythread_t *thr, void **retval);
-int mythread_detach(mythread_t *thr);
+int uthread_create(uthread_t *thr, void *(*start_routine)(void *), void *arg);
+int uthread_join(uthread_t *thr, void **retval);
+
+/* int uthread_detach(uthread_t *thr); */
+void uthread_yield(void);
 
 #endif
