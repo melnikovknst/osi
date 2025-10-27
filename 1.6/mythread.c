@@ -32,13 +32,6 @@ static struct {
     int tid;
 } cleaner_struct;
 
-static int futex_wait(int *a, int v) {
-    return syscall(SYS_futex, a, FUTEX_WAIT, v, NULL, NULL, 0);
-}
-static int futex_wake(int *a, int n) {
-    return syscall(SYS_futex, a, FUTEX_WAKE, n, NULL, NULL, 0);
-}
-
 static int tramp(void *p) {
     struct start_pack *sp = (struct start_pack *)p;
     void *rv = sp->fn(sp->arg);
@@ -81,9 +74,9 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
 
     int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND
               | CLONE_SYSVSEM | CLONE_THREAD
-              | CLONE_CHILD_CLEARTID | CLONE_PARENT_SETTID;
+              | CLONE_CHILD_CLEARTID | CLONE_PARENT_SETTID | CLONE_CHILD_SETTID;
 
-    int tid = syscall(SYS_clone, flags, (char*)stk + stk_sz, &thr->tid, NULL, ctid);
+    int tid = syscall(SYS_clone, flags, (char*)stk + stk_sz, &thr->tid, ctid, NULL);
     if (tid == -1) {
         int e = errno;
         munmap(stk, stk_sz);
@@ -97,8 +90,6 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
         (void)tramp(sp);
         return 0;
     }
-
-    *ctid = thr->tid;
 
     thr->tid = tid;
     thr->stack = stk;
@@ -122,7 +113,7 @@ int mythread_join(mythread_t *thr, void **retval) {
         if (v == 0) {
             break;
         }
-        futex_wait(thr->ctid, v);
+        syscall(SYS_futex, thr->ctid, FUTEX_WAIT, v, NULL, NULL, 0);
     }
 
     if (retval) {
@@ -166,7 +157,7 @@ static int cleaner(void *arg) {
             int v = *w->ctid;
             if (v != 0) {
                 lock_rel(&cleaner_struct.lock);
-                futex_wait(w->ctid, v);
+                syscall(SYS_futex, w->ctid, FUTEX_WAIT, v, NULL, NULL, 0);
                 lock_acq(&cleaner_struct.lock);
                 continue;
             }
