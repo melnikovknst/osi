@@ -3,48 +3,264 @@
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
+#include <linux/futex.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdint.h>
 
 struct start_pack {
     void *(*fn)(void *);
-    void *arg;
+    void  *arg;
+    void **ret_slot;
 };
+
+struct watch {
+    int *ctid;
+    void *stack;
+    size_t stack_sz;
+    void *pack;
+    struct watch *next;
+};
+
+static struct {
+    int init;
+    int lock;
+    struct watch *head;
+    void *stack;
+    size_t stack_sz;
+    int tid;
+} cleaner_struct;
+
+static int futex_wait(int *a, int v) {
+    return syscall(SYS_futex, a, FUTEX_WAIT, v, NULL, NULL, 0);
+}
+static int futex_wake(int *a, int n) {
+    return syscall(SYS_futex, a, FUTEX_WAKE, n, NULL, NULL, 0);
+}
 
 static int tramp(void *p) {
     struct start_pack *sp = (struct start_pack *)p;
-    void *(*fn)(void*) = sp->fn;
-    void *arg = sp->arg;
-    free(sp);
-    (void)fn(arg);
+    void *rv = sp->fn(sp->arg);
+    if (sp->ret_slot) {
+        *sp->ret_slot = rv;
+    }
     syscall(SYS_exit, 0);
     return 0;
 }
 
 int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) {
-    const size_t stack_sz = 1 << 20;
-    void *stk = mmap(NULL, stack_sz, PROT_READ|PROT_WRITE,
-                     MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0);
-    if (stk == MAP_FAILED) return -1;
+    const size_t stk_sz = 1<<20;
+    void *stk = mmap(NULL, stk_sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0);
+    if (stk == MAP_FAILED) {
+        return -1;
+    }
 
-    struct start_pack *sp = malloc(sizeof(*sp));
-    if (!sp) { munmap(stk, stack_sz); errno = ENOMEM; return -1; }
+    int *ctid = malloc(sizeof *ctid);
+    if (!ctid) { 
+        int e = errno; 
+        munmap(stk, stk_sz); 
+        errno = e; 
+        return -1; 
+    }
+
+    *ctid = 0;
+
+    struct start_pack *sp = (struct start_pack*)malloc(sizeof(*sp));
+    if (!sp) { 
+        int e = errno; 
+        munmap(stk, stk_sz); 
+        free(ctid); 
+        errno = e; 
+        return -1; 
+    }
+
     sp->fn = start_routine;
     sp->arg = arg;
+    sp->ret_slot = &thr->retval;
 
     int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND
-              | CLONE_SYSVSEM | CLONE_THREAD;
+              | CLONE_SYSVSEM | CLONE_THREAD
+              | CLONE_CHILD_CLEARTID | CLONE_PARENT_SETTID;
 
-    int tid = clone(tramp, (char*)stk + stack_sz, flags, sp);
+    int tid = syscall(SYS_clone, flags, (char*)stk + stk_sz, &thr->tid, NULL, ctid);
     if (tid == -1) {
         int e = errno;
-        munmap(stk, stack_sz);
+        munmap(stk, stk_sz);
+        free(ctid);
         free(sp);
         errno = e;
         return -1;
     }
 
-    if (thr) *thr = tid;
+    if (tid == 0) {
+        (void)tramp(sp);
+        return 0;
+    }
+
+    *ctid = thr->tid;
+
+    thr->tid = tid;
+    thr->stack = stk;
+    thr->stack_sz = stk_sz;
+    thr->ctid = ctid;
+    thr->detached = 0;
+    thr->pack = sp;
+    thr->retval = NULL;
+
+    return 0;
+}
+
+int mythread_join(mythread_t *thr, void **retval) {
+    if (!thr || thr->detached) { 
+        errno = EINVAL; 
+        return -1;
+    }
+
+    while (1) {
+        int v = *thr->ctid;
+        if (v == 0) {
+            break;
+        }
+        futex_wait(thr->ctid, v);
+    }
+
+    if (retval) {
+        *retval = thr->retval;
+    }
+
+    munmap(thr->stack, thr->stack_sz);
+    free(thr->ctid);
+    free(thr->pack);
+
+    thr->stack = NULL;
+    thr->stack_sz = 0;
+    thr->ctid = NULL;
+    thr->pack = NULL;
+    thr->tid = 0;
+    thr->retval = NULL;
+
+    return 0;
+}
+
+static int lock_acq(int *l) {
+    while (1) {
+        if (__sync_bool_compare_and_swap(l, 0, 1)) {
+            return 0;
+        }
+        syscall(SYS_futex, l, FUTEX_WAIT, 1, NULL, NULL, 0);
+    }
+}
+static void lock_rel(int *l) {
+    __sync_lock_release(l);
+    syscall(SYS_futex, l, FUTEX_WAKE, 1, NULL, NULL, 0);
+}
+
+static int cleaner(void *arg) {
+    (void)arg;
+    while (1) {
+        lock_acq(&cleaner_struct.lock);
+        struct watch **pp = &cleaner_struct.head;
+        while (*pp) {
+            struct watch *w = *pp;
+            int v = *w->ctid;
+            if (v != 0) {
+                lock_rel(&cleaner_struct.lock);
+                futex_wait(w->ctid, v);
+                lock_acq(&cleaner_struct.lock);
+                continue;
+            }
+            *pp = w->next;
+            munmap(w->stack, w->stack_sz);
+            free(w->ctid);
+            free(w->pack);
+            free(w);
+        }
+        lock_rel(&cleaner_struct.lock);
+    }
+
+    return 0;
+}
+
+static int cleaner_start(void) {
+    if (cleaner_struct.init) {
+        return 0;
+    }
+
+    cleaner_struct.stack_sz = 1<<20;
+    cleaner_struct.stack = mmap(NULL, cleaner_struct.stack_sz, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_STACK, -1, 0);
+    if (cleaner_struct.stack == MAP_FAILED) {
+        return -1;
+    }
+
+    int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_SYSVSEM | CLONE_THREAD;
+    int tid = clone(cleaner, (char*)cleaner_struct.stack + cleaner_struct.stack_sz, flags, NULL);
+
+    if (tid == -1) {
+        int e = errno;
+        munmap(cleaner_struct.stack, cleaner_struct.stack_sz);
+        errno = e;
+        return -1; 
+    }
+
+    cleaner_struct.tid = tid;
+    cleaner_struct.init = 1;
+
+    return 0;
+}
+
+int mythread_detach(mythread_t *thr) {
+    if (!thr) { 
+        errno = EINVAL; 
+        return -1; 
+    }
+
+    if (thr->detached) {
+        return 0;
+    }
+
+    thr->detached = 1;
+
+    if (*thr->ctid == 0) {
+        munmap(thr->stack, thr->stack_sz);
+        free(thr->ctid);
+        free(thr->pack);
+
+        thr->stack = NULL;
+        thr->stack_sz = 0;
+        thr->ctid = NULL;
+        thr->pack = NULL;
+        thr->tid = 0;
+        thr->retval = NULL;
+
+        return 0;
+    }
+
+    if (cleaner_start() == -1) {
+        return -1;
+    }
+
+    struct watch *w = (struct watch*)malloc(sizeof(*w));
+    if (!w) {
+        return -1;
+    }
+
+    w->ctid = thr->ctid;
+    w->stack = thr->stack;
+    w->stack_sz = thr->stack_sz;
+    w->pack = thr->pack;
+
+    lock_acq(&cleaner_struct.lock);
+    w->next = cleaner_struct.head;
+    cleaner_struct.head = w;
+    lock_rel(&cleaner_struct.lock);
+
+    thr->stack = NULL;
+    thr->stack_sz = 0;
+    thr->ctid = NULL;
+    thr->pack = NULL;
+    thr->tid = 0;
+    thr->retval = NULL;
+
     return 0;
 }
