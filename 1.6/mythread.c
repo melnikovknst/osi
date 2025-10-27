@@ -10,6 +10,9 @@
 #include <errno.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdatomic.h>
+
+static _Atomic int active_threads = 0;
 
 struct start_pack {
     void *(*fn)(void *);
@@ -43,6 +46,8 @@ static int tramp(void *p) {
 
     if (sp && sp->ret_slot)
         *sp->ret_slot = rv;
+
+    atomic_fetch_sub_explicit(&active_threads, 1, memory_order_relaxed);
 
     syscall(SYS_exit, 0);
 }
@@ -106,6 +111,8 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
     thr->pack = sp;
     thr->retval = NULL;
 
+    atomic_fetch_add_explicit(&active_threads, 1, memory_order_relaxed);
+
     return 0;
 }
 
@@ -153,6 +160,10 @@ static int cleaner(void *arg) {
     (void)arg;
     while (1) {
         lock_acq(&cleaner_struct.lock);
+        if (cleaner_struct.head == NULL && atomic_load_explicit(&active_threads, memory_order_relaxed) == 0) {
+            lock_rel(&cleaner_struct.lock);
+            syscall(SYS_exit, 0);
+        }
         struct watch **pp = &cleaner_struct.head;
         while (*pp) {
             struct watch *w = *pp;
