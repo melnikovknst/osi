@@ -50,23 +50,6 @@ int main(void) {
 		return 1;
 	}
 
-	// if (uthread_create(&td, worker_detach, NULL)) {
-	// 	fprintf(stderr, "create(detach): %s\n", strerror(errno));
-	// 	return 1;
-	// }
-	// if (uthread_detach(&td)) {
-	// 	fprintf(stderr, "detach 1: %s\n", strerror(errno));
-	// 	return 1;
-	// }
-	// if (uthread_create(&td2, worker_detach_2, NULL)) {
-	// 	fprintf(stderr, "create(detach): %s\n", strerror(errno));
-	// 	return 1;
-	// }
-	// if (uthread_detach(&td2)) {
-	// 	fprintf(stderr, "detach 2: %s\n", strerror(errno));
-	// 	return 1;
-	// }
-
     if (uthread_join(&tj1, &ret1)) {
 		fprintf(stderr, "join: %s\n", strerror(errno));
 		return 1;

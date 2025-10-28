@@ -17,7 +17,6 @@ typedef struct uthread {
 int uthread_create(uthread_t *thr, void *(*start_routine)(void *), void *arg);
 int uthread_join(uthread_t *thr, void **retval);
 
-/* int uthread_detach(uthread_t *thr); */
 void uthread_yield(void);
 
 #endif
