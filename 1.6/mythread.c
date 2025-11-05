@@ -239,8 +239,26 @@ int mythread_detach(mythread_t *thr) {
             return -1;
 
         struct watch *w = (struct watch*)malloc(sizeof *w);
-        if (!w)
+        if (!w) {
+            while (1) {
+                int v = *thr->ctid;
+                if (v == 0) break;
+                syscall(SYS_futex, thr->ctid, FUTEX_WAIT, v, NULL, NULL, 0);
+            }
+        
+            munmap(thr->stack, thr->stack_sz);
+            free(thr->ctid);
+            free(thr->pack);
+        
+            thr->stack = NULL;
+            thr->stack_sz = 0;
+            thr->ctid = NULL;
+            thr->pack = NULL;
+            thr->tid = 0;
+            thr->retval = NULL;
+        
             return -1;
+        }
 
         w->ctid = thr->ctid;
         w->stack = thr->stack;
