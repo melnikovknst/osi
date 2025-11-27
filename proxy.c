@@ -8,6 +8,9 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+#define CONNECT_TIMEOUT_MS 5000
+#define IDLE_RW_MS 30000
+
 static int send_all(int fd, const void *buf, size_t n) {
     const char *p = (const char *) buf;
     size_t left = n;
@@ -35,6 +38,42 @@ int proxy_init(proxy_ctx_t *px, int port) {
     return 0;
 }
 
+static int pass_through_to_upstream(const http_request_t *req, int client_fd) {
+    int us = net_connect_host(req->host, req->port, CONNECT_TIMEOUT_MS);
+    if (us < 0) {
+        const char *resp = "HTTP/1.0 502 Bad Gateway\r\nConnection: close\r\n\r\n";
+        send_all(client_fd, resp, strlen(resp));
+        return -1;
+    }
+    set_timeouts(us, IDLE_RW_MS, IDLE_RW_MS);
+
+    char reqbuf[4096];
+    int qlen = http_build_upstream_get(reqbuf, sizeof reqbuf, req);
+    if (send_all(us, reqbuf, (size_t) qlen) != 0) {
+        close(us);
+        const char *resp = "HTTP/1.0 502 Bad Gateway\r\nConnection: close\r\n\r\n";
+        send_all(client_fd, resp, strlen(resp));
+        return -1;
+    }
+
+    char buf[64 * 1024];
+    while (1) {
+        ssize_t n = recv(us, buf, sizeof buf, 0);
+        if (n == 0) 
+            break;
+        if (n < 0) {
+            if (errno == EINTR) 
+                continue;
+            break;
+        }
+        if (send_all(client_fd, buf, (size_t) n) != 0) 
+            break;
+    }
+    close(us);
+    return 0;
+}
+
+
 void proxy_run_accept_loop(proxy_ctx_t *px) {
     printf("listening on port %d", px->port);
     while (1) {
@@ -56,8 +95,8 @@ void proxy_run_accept_loop(proxy_ctx_t *px) {
             continue;
         }
 
-        const char *resp = "HTTP/1.0 501 Not Implemented\r\nConnection: close\r\n\r\n";
-        send_all(cfd, resp, strlen(resp));
+        pass_through_to_upstream(&req, cfd);
+        
         close(cfd);
     }
 }
