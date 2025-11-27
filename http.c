@@ -16,6 +16,9 @@ static ssize_t read_line(int fd, char *buf, size_t cap) {
         if (n == 0) 
             return 0;
         if (n < 0) {
+            if (errno == EINTR) 
+                continue;
+                
             return -1;
         }
 

@@ -10,8 +10,6 @@
 #include "net.h"
 #include "config.h"
 
-#define LISTEN_BACKLOG 512
-
 int set_timeouts(int fd, int rcv_ms, int snd_ms) {
     struct timeval tv;
     if (rcv_ms >= 0) {
