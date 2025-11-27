@@ -5,18 +5,13 @@
 #include <errno.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <stdio.h>
 
 #include "proxy.h"
 #include "config.h"
 #include "net.h"
 #include "http.h"
 #include "logger.h"
-
-#define CONNECT_TIMEOUT_MS 5000
-#define IDLE_RW_MS 30000
-#define FIRST_BYTE_MS 10000
-#define QUEUE_CAP 1000
-#define PROXY_PORT 8080
 
 typedef struct {
     proxy_ctx_t *px;
