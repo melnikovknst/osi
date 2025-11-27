@@ -1,15 +1,29 @@
-#include "proxy.h"
-#include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <stdio.h>
 
-int main() {
-    proxy_ctx_t px;
-    if (proxy_init(&px, 8080, 4) != 0) { 
-        printf("proxy_init failed\n"); 
-        return 1; 
+#include "proxy.h"
+#include "config.h"
+
+static proxy_ctx_t gpx;
+static volatile sig_atomic_t stop_flag=0;
+static void on_sigint(int s){ (void)s; stop_flag=1; close(gpx.listen_fd); }
+
+int main(){
+    int port=8080, workers = 4;
+
+    if (proxy_init(&gpx, port, workers)) {
+        printf("init failed");
+        return 1;
     }
-    proxy_run_accept_loop(&px);
-    proxy_shutdown(&px);
+
+    struct sigaction sa = {0};
+    sa.sa_handler = on_sigint;
+    sigaction(SIGINT, &sa, NULL);
+    proxy_run_accept_loop(&gpx);
+    proxy_shutdown(&gpx);
+    printf("finishing");
 
     return 0;
 }
