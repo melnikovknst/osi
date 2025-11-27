@@ -4,7 +4,7 @@
 
 int main() {
     proxy_ctx_t px;
-    if (proxy_init(&px, 8080) != 0) { 
+    if (proxy_init(&px, 8080, 4) != 0) { 
         printf("proxy_init failed\n"); 
         return 1; 
     }

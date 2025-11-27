@@ -5,12 +5,19 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <sys/socket.h>
 
 #define CONNECT_TIMEOUT_MS 5000
 #define IDLE_RW_MS 30000
 #define FIRST_BYTE_MS 10000
+#define QUEUE_CAP 1000
+
+typedef struct {
+    proxy_ctx_t *px;
+    int client_fd;
+} client_job_t;
 
 static int send_all(int fd, const void *buf, size_t n) {
     const char *p = (const char *) buf;
@@ -30,12 +37,16 @@ static int send_all(int fd, const void *buf, size_t n) {
     return 0;
 }
 
-int proxy_init(proxy_ctx_t *px, int port) {
+int proxy_init(proxy_ctx_t *px, int port, int workers) {
     px->port = port;
     px->listen_fd = net_listen(port);
-    if (px->listen_fd < 0)
+    if (px->listen_fd < 0) return -1;
+
+    px->workers = workers;
+    if (tp_init(&px->tp, px->workers, QUEUE_CAP) != 0) {
+        close(px->listen_fd);
         return -1;
-    
+    }
     return 0;
 }
 
@@ -97,6 +108,29 @@ static int pass_through_to_upstream(const http_request_t *req, int client_fd) {
 }
 
 
+static void handle_client(void *arg) {
+    client_job_t *cj = (client_job_t*)arg;
+    int cfd = cj->client_fd;
+
+    set_timeouts(cfd, FIRST_BYTE_MS, IDLE_RW_MS);
+
+    http_request_t req;
+    int rc = http_parse_client_request(cfd, &req);
+    if (rc != 0) {
+        const char *resp = "HTTP/1.0 400 Bad Request\r\nConnection: close\r\n\r\n";
+        send_all(cfd, resp, strlen(resp));
+        close(cfd);
+        free(cj);
+        return;
+    }
+
+    (void)pass_through_to_upstream(&req, cfd);
+
+    close(cfd);
+    free(cj);
+}
+
+
 void proxy_run_accept_loop(proxy_ctx_t *px) {
     printf("listening on port %d", px->port);
     while (1) {
@@ -118,13 +152,21 @@ void proxy_run_accept_loop(proxy_ctx_t *px) {
             continue;
         }
 
-        pass_through_to_upstream(&req, cfd);
-        
-        close(cfd);
+        client_job_t *cj = (client_job_t*)malloc(sizeof *cj);
+        if (!cj) { close(cfd); continue; }
+        cj->px = px;
+        cj->client_fd = cfd;
+
+        if (tp_submit(&px->tp, handle_client, cj) != 0) {
+            close(cfd);
+            free(cj);
+        }
     }
 }
 
 void proxy_shutdown(proxy_ctx_t *px) {
-    if (px->listen_fd >= 0) 
-        close(px->listen_fd);
+    tp_poison_and_join(&px->tp);
+    tp_destroy(&px->tp);
+    if (px->listen_fd >= 0) close(px->listen_fd);
 }
+
