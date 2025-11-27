@@ -10,6 +10,7 @@
 
 #define CONNECT_TIMEOUT_MS 5000
 #define IDLE_RW_MS 30000
+#define FIRST_BYTE_MS 10000
 
 static int send_all(int fd, const void *buf, size_t n) {
     const char *p = (const char *) buf;
@@ -45,7 +46,8 @@ static int pass_through_to_upstream(const http_request_t *req, int client_fd) {
         send_all(client_fd, resp, strlen(resp));
         return -1;
     }
-    set_timeouts(us, IDLE_RW_MS, IDLE_RW_MS);
+
+    set_timeouts(us, FIRST_BYTE_MS, IDLE_RW_MS);
 
     char reqbuf[4096];
     int qlen = http_build_upstream_get(reqbuf, sizeof reqbuf, req);
@@ -57,6 +59,8 @@ static int pass_through_to_upstream(const http_request_t *req, int client_fd) {
     }
 
     char buf[64 * 1024];
+    int got_any = 0;
+
     while (1) {
         ssize_t n = recv(us, buf, sizeof buf, 0);
         if (n == 0) 
@@ -64,11 +68,30 @@ static int pass_through_to_upstream(const http_request_t *req, int client_fd) {
         if (n < 0) {
             if (errno == EINTR) 
                 continue;
-            break;
+
+            int e = errno;
+            close(us);
+
+            if (!got_any && (e == EAGAIN || e == EWOULDBLOCK)) {
+                const char *resp = "HTTP/1.0 504 Gateway Timeout\r\nConnection: close\r\n\r\n";
+                send_all(client_fd, resp, strlen(resp));
+            } else {
+                const char *resp = "HTTP/1.0 502 Bad Gateway\r\nConnection: close\r\n\r\n";
+                if (!got_any) 
+                    send_all(client_fd, resp, strlen(resp));
+            }
+            return -1;
         }
+
+        if (!got_any) {
+            got_any = 1;
+            set_timeouts(us, IDLE_RW_MS, IDLE_RW_MS);
+        }
+
         if (send_all(client_fd, buf, (size_t) n) != 0) 
             break;
     }
+
     close(us);
     return 0;
 }
