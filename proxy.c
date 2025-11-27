@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdio.h> 
 #include <errno.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -11,6 +10,7 @@
 #include "config.h"
 #include "net.h"
 #include "http.h"
+#include "logger.h"
 
 #define CONNECT_TIMEOUT_MS 5000
 #define IDLE_RW_MS 30000
@@ -82,7 +82,7 @@ static int stream_reader_to_client(record_t *r, int fd) {
 static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *req, int client_fd) {
     int us = net_connect_host(req->host, req->port, CONNECT_TIMEOUT_MS);
     if (us < 0) {
-        printf("connect upstream %s:%d failed", req->host, req->port);
+        log_err("connect upstream %s:%d failed", req->host, req->port);
         rec_cancel(&px->cache, r);
         return -1;
     }
@@ -91,7 +91,7 @@ static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *
     char reqbuf[4096];
     int qlen = http_build_upstream_get(reqbuf, sizeof reqbuf, req);
     if (send_all(us, reqbuf, (size_t) qlen)) {
-        printf("send upstream failed");
+        log_err("send upstream failed");
         safe_close(us);
         rec_cancel(&px->cache, r);
         return -1;
@@ -107,7 +107,7 @@ static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *
         if (n < 0) {
             if (errno == EINTR) 
                 continue;
-            printf("recv upstream err: %s", strerror(errno));
+            log_err("recv upstream err: %s", strerror(errno));
             safe_close(us);
             rec_cancel(&px->cache, r);
             return -1;
@@ -119,7 +119,7 @@ static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *
         }
 
         if (rec_append(&px->cache, r, buf, (size_t) n)) {
-            printf("append failed");
+            log_err("append failed");
             safe_close(us);
             rec_cancel(&px->cache, r);
             return -1;
@@ -159,14 +159,14 @@ static void handle_client(void *arg) {
     cache_acquire(&px->cache, key, &acq);
 
     if (acq.is_fetcher) {
-        printf("MISS+FETCH %s", key);
+        log_info("MISS+FETCH %s", key);
         (void) fetch_and_stream(px, acq.rec, &req, fd);
     } else {
         if (rec_is_completed(acq.rec)) {
-            printf("HIT %s", key);
+            log_info("HIT %s", key);
             rec_touch_lru(&px->cache, acq.rec);
         } else {
-            printf("JOIN %s", key);
+            log_info("JOIN %s", key);
         }
         (void) stream_reader_to_client(acq.rec, fd);
     }
@@ -188,7 +188,7 @@ int proxy_init(proxy_ctx_t *px, int port, int workers) {
 }
 
 void proxy_run_accept_loop(proxy_ctx_t *px) {
-    printf("listening on port %d, workers=%d, buckets=%d", PROXY_PORT, px->workers, (int) N_BUCKETS);
+    log_info("listening on port %d, workers=%d, buckets=%d", PROXY_PORT, px->workers, (int) N_BUCKETS);
     while (1) {
         struct sockaddr_in sa;
         socklen_t sl = sizeof sa;
@@ -196,7 +196,7 @@ void proxy_run_accept_loop(proxy_ctx_t *px) {
         if (cfd < 0) {
             if (errno == EINTR) 
                 continue;
-            printf("accept: %s", strerror(errno));
+            log_err("accept: %s", strerror(errno));
             break;
         }
         client_job_t *cj = calloc(1, sizeof *cj);

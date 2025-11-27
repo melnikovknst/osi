@@ -9,6 +9,7 @@
 
 #include "net.h"
 #include "config.h"
+#include "logger.h"
 
 int set_timeouts(int fd, int rcv_ms, int snd_ms) {
     struct timeval tv;
@@ -30,7 +31,7 @@ int set_timeouts(int fd, int rcv_ms, int snd_ms) {
 int net_listen(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        printf("socket: %s", strerror(errno));
+        log_err("socket: %s", strerror(errno));
         return -1;
     }
 
@@ -44,13 +45,13 @@ int net_listen(int port) {
     a.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(fd, (struct sockaddr *) &a, sizeof a)) {
-        printf("bind: %s", strerror(errno));
+        log_err("bind: %s", strerror(errno));
         close(fd);
         return -1;
     }
 
     if (listen(fd, LISTEN_BACKLOG)) {
-        printf("listen: %s", strerror(errno));
+        log_err("listen: %s", strerror(errno));
         close(fd);
         return -1;
     }
