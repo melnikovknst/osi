@@ -77,23 +77,23 @@ static int stream_reader_to_client(record_t *r, int fd) {
 static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *req, int client_fd) {
     int us = net_connect_host(req->host, req->port, CONNECT_TIMEOUT_MS);
     if (us < 0) {
-        log_err("connect upstream %s:%d failed", req->host, req->port);
         rec_cancel(&px->cache, r);
         return -1;
     }
-    set_timeouts(us, IDLE_RW_MS, IDLE_RW_MS);
+
+    set_timeouts(us, FIRST_BYTE_MS, IDLE_RW_MS);
 
     char reqbuf[4096];
     int qlen = http_build_upstream_get(reqbuf, sizeof reqbuf, req);
-    if (send_all(us, reqbuf, (size_t) qlen)) {
-        log_err("send upstream failed");
+    if (send_all(us, reqbuf, (size_t)qlen)) {
         safe_close(us);
         rec_cancel(&px->cache, r);
         return -1;
     }
 
+    char buf[64*1024];
     int initiator_alive = (client_fd >= 0);
-    char buf[64 * 1024];
+    size_t rx = 0; // ← считаем полученные байты
 
     while (1) {
         ssize_t n = recv(us, buf, sizeof buf, 0);
@@ -102,19 +102,50 @@ static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *
         if (n < 0) {
             if (errno == EINTR) 
                 continue;
-            log_err("recv upstream err: %s", strerror(errno));
-            safe_close(us);
-            rec_cancel(&px->cache, r);
-            return -1;
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (rx == 0) {
+                    const char *resp = "HTTP/1.0 Gateway Timeout\r\nConnection: close\r\n\r\n";
+                    (void)send_all(client_fd, resp, strlen(resp));
+                    safe_close(us);
+                    rec_cancel(&px->cache, r);
+                    return -1;
+                }
+                break;
+            }
+
+            if ((errno == ECONNRESET || errno == EPIPE)) {
+                if (rx > 0)
+                    break;
+
+                const char *resp = "HTTP/1.0 Bad Gateway\r\nConnection: close\r\n\r\n";
+                (void)send_all(client_fd, resp, strlen(resp));
+                safe_close(us);
+                rec_cancel(&px->cache, r);
+                return -1;
+            }
+
+            if (rx == 0) {
+                const char *resp = "HTTP/1.0 Bad Gateway\r\nConnection: close\r\n\r\n";
+                (void)send_all(client_fd, resp, strlen(resp));
+                safe_close(us);
+                rec_cancel(&px->cache, r);
+                return -1;
+            }
+            break;
         }
+
+        rx += (size_t)n; 
+
+        if (rx == (size_t)n)
+            set_timeouts(us, IDLE_RW_MS, IDLE_RW_MS);
 
         if (initiator_alive) {
-            if (send_all(client_fd, buf, (size_t) n) != 0) 
-                initiator_alive = 0;
+            if (send_all(client_fd, buf, (size_t)n) != 0)
+                initiator_alive = 0; 
         }
 
-        if (rec_append(&px->cache, r, buf, (size_t) n)) {
-            log_err("append failed");
+        if (rec_append(&px->cache, r, buf, (size_t)n)) {
             safe_close(us);
             rec_cancel(&px->cache, r);
             return -1;
