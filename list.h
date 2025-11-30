@@ -1,5 +1,6 @@
 #pragma once
 
+#define _GNU_SOURCE
 #include <pthread.h>
 
 typedef struct _Node {
@@ -11,3 +12,6 @@ typedef struct _Node {
 typedef struct _Storage {
     Node *first;
 } Storage;
+
+Storage* storage_init(int n);
+void storage_destroy(Storage *st);
