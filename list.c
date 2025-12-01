@@ -10,7 +10,6 @@
 #include "list.h"
 
 static void generate_random_string(char *buf) {
-    // srand(time(NULL));
 	int len = (int)rand() % 100;
 
 	for (int i = 0; i < len; i++) {
