@@ -3,7 +3,7 @@ CFLAGS  = -O2 -Wall -Wextra -pthread -std=c11
 LDFLAGS = -pthread
 SRC = main.c list.c
 OBJ = $(SRC:.c=.o)
-BIN = mutex
+BIN = spin
 
 all: $(BIN)
 
