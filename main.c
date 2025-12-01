@@ -102,10 +102,22 @@ static void *swap_thread(void *arg) {
 		int idx = rand_r(&seed) % (list_size - 2);
 
 		Node *prev = st->first;
-		int pos = 0;
+		if (!prev)
+			continue;
 
-		while (prev && pos < idx) {
-			prev = prev->next;
+		pthread_mutex_lock(&prev->sync);
+
+		int pos = 0;
+		while (pos < idx) {
+			Node *tmp = prev->next;
+			if (!tmp) {
+				pthread_mutex_unlock(&prev->sync);
+				prev = NULL;
+				break;
+			}
+			pthread_mutex_lock(&tmp->sync);
+			pthread_mutex_unlock(&prev->sync);
+			prev = tmp;
 			pos++;
 		}
 
@@ -113,24 +125,21 @@ static void *swap_thread(void *arg) {
 			continue;
 
 		Node *cur = prev->next;
-		if (!cur)
+		if (!cur) {
+			pthread_mutex_unlock(&prev->sync);
 			continue;
+		}
+		pthread_mutex_lock(&cur->sync);
 
 		Node *next = cur->next;
-		if (!next)
-			continue;
-
-		pthread_mutex_lock(&prev->sync);
-		pthread_mutex_lock(&cur->sync);
-		pthread_mutex_lock(&next->sync);
-
-		if (prev->next != cur || cur->next != next) {
-			pthread_mutex_unlock(&next->sync);
+		if (!next) {
 			pthread_mutex_unlock(&cur->sync);
 			pthread_mutex_unlock(&prev->sync);
 			continue;
 		}
+		pthread_mutex_lock(&next->sync);
 
+		int len1 = (int)strlen(prev->value);
 		int len2 = (int)strlen(cur->value);
 		int len3 = (int)strlen(next->value);
 		int need_swap = 0;
@@ -139,7 +148,7 @@ static void *swap_thread(void *arg) {
 			need_swap = 1;
 		else if (type == WORKER_DEC && len2 < len3)
 			need_swap = 1;
-		else if (type == WORKER_EQ && len2 == len3)
+		else if (type == WORKER_EQ && len1 != len2 && len2 == len3)
 			need_swap = 1;
 
 		if (need_swap) {
