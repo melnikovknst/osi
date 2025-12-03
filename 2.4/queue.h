@@ -30,7 +30,8 @@ typedef struct _Queue {
     long add_count;
     long get_count;
 
-    my_spinlock_t lock;      
+    // my_spinlock_t lock;
+    my_mutex_t lock;  
 } queue_t;
 
 queue_t* queue_init(int max_count);
