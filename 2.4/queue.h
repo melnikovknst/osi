@@ -8,8 +8,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <semaphore.h>
 
+#include "mylock.h"
 
 typedef struct _QueueNode {
     int val;
@@ -30,10 +30,7 @@ typedef struct _Queue {
     long add_count;
     long get_count;
 
-    pthread_spinlock_t lock;
-
-    sem_t slots_free;       
-    sem_t slots_used;       
+    my_spinlock_t lock;      
 } queue_t;
 
 queue_t* queue_init(int max_count);

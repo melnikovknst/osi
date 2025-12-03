@@ -16,23 +16,6 @@
 #define RED "\033[41m"
 #define NOCOLOR "\033[0m"
 
-void set_cpu(int n) {
-	int err;
-	cpu_set_t cpuset;
-	pthread_t tid = pthread_self();
-
-	CPU_ZERO(&cpuset);
-	CPU_SET(n, &cpuset);
-
-	err = pthread_setaffinity_np(tid, sizeof(cpu_set_t), &cpuset);
-	if (err) {
-		printf("set_cpu: pthread_setaffinity failed for cpu %d\n", n);
-		return;
-	}
-
-	printf("set_cpu: set cpu %d\n", n);
-}
-
 void *reader(void *arg) {
 	pthread_setname_np(pthread_self(), "reader");
 	int expected = 0;
