@@ -161,11 +161,15 @@ static int cleaner(void *arg) {
     (void)arg;
     while (1) {
         lock_acq(&cleaner_struct.lock);
-        if (cleaner_struct.head == NULL) {
+        if (cleaner_struct.head == NULL) {  // ЕСЛИ ЧИСТИТЬ НЕЧЕГО ТО ЗАВЕРШАЕМ КЛИНЕР ТУТ
+            printf("cleaner struct is empty\n");
             if (atomic_load_explicit(&active_threads, memory_order_relaxed) == 0) {
                 cleaner_struct.init = 0;
                 lock_rel(&cleaner_struct.lock);
-                syscall(SYS_exit, 0);
+
+                printf("cleaner finished\n");
+
+                syscall(SYS_exit, 0);   // !!!!
             }
             cleaner_struct.pending = 0;
             lock_rel(&cleaner_struct.lock);
