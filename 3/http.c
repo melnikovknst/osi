@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <strings.h>
 
 #include "http.h"
 #include "config.h"
