@@ -4,7 +4,7 @@
 
 #define N_BUCKETS 4096
 #define BLOCK_SZ (64*1024)
-#define SOFT_LIMIT_BYTES (128ULL<<20) 
+#define SOFT_LIMIT_BYTES (1024ULL<<20) 
 
 #define WORKERS 4
 #define QUEUE_CAP 1000
