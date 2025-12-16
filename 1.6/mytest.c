@@ -15,6 +15,7 @@ static void *worker_join(void *arg) {
 
 static void *worker_detach(void *arg) {
     (void)arg;
+    sleep(12);
     write(1, "detached thr 1: done\n", 21);
     return NULL;
 }

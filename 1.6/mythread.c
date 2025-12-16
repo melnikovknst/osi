@@ -19,6 +19,7 @@ struct start_pack {
     void *(*fn)(void *);
     void  *arg;
     void **ret_slot;
+    _Atomic int finished;
 };
 
 struct watch {
@@ -36,7 +37,7 @@ static struct {
     void  *stack;
     size_t stack_sz;
     int tid;
-    int pending;
+    _Atomic int pending;
 } cleaner_struct;
 
 static int tramp(void *p) {
@@ -48,6 +49,15 @@ static int tramp(void *p) {
 
     if (sp && sp->ret_slot)
        *sp->ret_slot = rv;
+
+    if (sp) {
+        atomic_store_explicit(&sp->finished, 1, memory_order_relaxed);
+        if (sp->ret_slot == NULL) {
+            printf("tramp: detached thr routine done\n");
+            atomic_store_explicit(&cleaner_struct.pending, 1, memory_order_relaxed);
+            syscall(SYS_futex, &cleaner_struct.pending, FUTEX_WAKE, 1, NULL, NULL, 0);
+        }
+    }
 
     atomic_fetch_sub_explicit(&active_threads, 1, memory_order_relaxed);
 
@@ -88,6 +98,7 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
     sp->fn = start_routine;
     sp->arg = arg;
     sp->ret_slot = &thr->retval;
+    atomic_store_explicit(&sp->finished, 0, memory_order_relaxed);
 
     thr->stack = stk;
     thr->stack_sz = stk_sz;
@@ -160,39 +171,53 @@ static void lock_rel(int *l) {
 static int cleaner(void *arg) {
     (void)arg;
     while (1) {
-        lock_acq(&cleaner_struct.lock);
-        if (cleaner_struct.head == NULL) {  // ЕСЛИ ЧИСТИТЬ НЕЧЕГО ТО ЗАВЕРШАЕМ КЛИНЕР ТУТ
-            printf("cleaner struct is empty\n");
-            if (atomic_load_explicit(&active_threads, memory_order_relaxed) == 0) {
-                cleaner_struct.init = 0;
-                lock_rel(&cleaner_struct.lock);
-
-                printf("cleaner finished\n");
-
-                syscall(SYS_exit, 0);   // !!!!
-            }
-            cleaner_struct.pending = 0;
-            lock_rel(&cleaner_struct.lock);
-            int v = 0;
-            syscall(SYS_futex, &cleaner_struct.pending, FUTEX_WAIT, v, NULL, NULL, 0);
-            continue;
+        int p = atomic_load_explicit(&cleaner_struct.pending, memory_order_relaxed);
+        while (p == 0) {
+            syscall(SYS_futex, &cleaner_struct.pending, FUTEX_WAIT, 0, NULL, NULL, 0);
+            p = atomic_load_explicit(&cleaner_struct.pending, memory_order_relaxed);
+            printf("cleaner: waked up\n");
         }
+        atomic_store_explicit(&cleaner_struct.pending, 0, memory_order_relaxed);
+
+        lock_acq(&cleaner_struct.lock);
+
         struct watch **pp = &cleaner_struct.head;
         while (*pp) {
             struct watch *w = *pp;
+            struct start_pack *sp = (struct start_pack*)w->pack;
+            int finished = 0;
+            if (sp)
+                finished = atomic_load_explicit(&sp->finished, memory_order_relaxed);
+            if (!finished) {
+                pp = &w->next;
+                continue;
+            }
+
             int v = *w->ctid;
-            if (v != 0) {
+            while (v != 0) {
+                printf("cleaner: thr not finished yet\n");
                 lock_rel(&cleaner_struct.lock);
                 syscall(SYS_futex, w->ctid, FUTEX_WAIT, v, NULL, NULL, 0);
                 lock_acq(&cleaner_struct.lock);
-                continue;
+                v = *w->ctid;
             }
+
             *pp = w->next;
             munmap(w->stack, w->stack_sz);
             free(w->ctid);
             free(w->pack);
             free(w);
+            printf("cleaner: cleaned thr\n");
         }
+
+        if (cleaner_struct.head == NULL &&
+            atomic_load_explicit(&active_threads, memory_order_relaxed) == 0) {
+            cleaner_struct.init = 0;
+            lock_rel(&cleaner_struct.lock);
+            printf("cleaner finished\n");
+            syscall(SYS_exit, 0);
+        }
+
         lock_rel(&cleaner_struct.lock);
     }
     return -1;
@@ -203,14 +228,14 @@ static int cleaner_start(void) {
         return 0;
 
     cleaner_struct.stack_sz = 1 << 20;
-    cleaner_struct.stack = mmap(NULL, cleaner_struct.stack_sz, PROT_READ | PROT_WRITE, 
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
+    cleaner_struct.stack = mmap(NULL, cleaner_struct.stack_sz, PROT_READ | PROT_WRITE,
+                                MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
     if (cleaner_struct.stack == MAP_FAILED) {
         cleaner_struct.init = 0;
         return -1;
     }
 
-    cleaner_struct.pending = 0;
+    atomic_store_explicit(&cleaner_struct.pending, 0, memory_order_relaxed);
 
     int flags = CLONE_VM | CLONE_FS | CLONE_FILES |
                 CLONE_SIGHAND | CLONE_SYSVSEM | CLONE_THREAD;
@@ -275,9 +300,7 @@ int mythread_detach(mythread_t *thr) {
     lock_acq(&cleaner_struct.lock);
     w->next = cleaner_struct.head;
     cleaner_struct.head = w;
-    cleaner_struct.pending = 1;
     lock_rel(&cleaner_struct.lock);
-    syscall(SYS_futex, &cleaner_struct.pending, FUTEX_WAKE, 1, NULL, NULL, 0);
 
     thr->stack = NULL;
     thr->stack_sz = 0;
