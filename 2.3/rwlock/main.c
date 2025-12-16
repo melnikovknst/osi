@@ -148,7 +148,7 @@ static void *swap_thread(void *arg) {
 			need_swap = 1;
 		else if (type == WORKER_DEC && len2 < len3)
 			need_swap = 1;
-		else if (type == WORKER_EQ && len1 != len2 && len2 == len3)
+		else if (type == WORKER_EQ && len1 != len2 && len1 == len3)
 			need_swap = 1;
 
 		if (need_swap) {
