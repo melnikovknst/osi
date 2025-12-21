@@ -31,7 +31,7 @@ struct watch {
 };
 
 static struct {
-    int init;
+    _Atomic int init;
     int lock;
     struct watch *head;
     void  *stack;
@@ -212,7 +212,7 @@ static int cleaner(void *arg) {
 
         if (cleaner_struct.head == NULL &&
             atomic_load_explicit(&active_threads, memory_order_relaxed) == 0) {
-            cleaner_struct.init = 0;
+            atomic_store_explicit(&cleaner_struct.init, 0, memory_order_relaxed);
             lock_rel(&cleaner_struct.lock);
             printf("cleaner finished\n");
             syscall(SYS_exit, 0);
@@ -224,14 +224,18 @@ static int cleaner(void *arg) {
 }
 
 static int cleaner_start(void) {
-    if (!__sync_bool_compare_and_swap(&cleaner_struct.init, 0, 1))
+    int expected = 0;
+    if (!atomic_compare_exchange_strong_explicit(&cleaner_struct.init,
+                                                 &expected, 1,
+                                                 memory_order_acq_rel,
+                                                 memory_order_acquire))
         return 0;
 
     cleaner_struct.stack_sz = 1 << 20;
     cleaner_struct.stack = mmap(NULL, cleaner_struct.stack_sz, PROT_READ | PROT_WRITE,
                                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
     if (cleaner_struct.stack == MAP_FAILED) {
-        cleaner_struct.init = 0;
+        atomic_store_explicit(&cleaner_struct.init, 0, memory_order_relaxed);
         return -1;
     }
 
@@ -245,7 +249,7 @@ static int cleaner_start(void) {
     if (tid == -1) {
         int e = errno;
         munmap(cleaner_struct.stack, cleaner_struct.stack_sz);
-        cleaner_struct.init = 0;
+        atomic_store_explicit(&cleaner_struct.init, 0, memory_order_relaxed);
         errno = e;
         return -1;
     }
@@ -278,10 +282,6 @@ int mythread_detach(mythread_t *thr) {
         return 0;
     }
 
-    if (cleaner_start() == -1) {
-        return -1;
-    }
-
     struct watch *w = (struct watch*)malloc(sizeof *w);
     if (!w) {
         errno = ENOMEM;
@@ -301,6 +301,10 @@ int mythread_detach(mythread_t *thr) {
     w->next = cleaner_struct.head;
     cleaner_struct.head = w;
     lock_rel(&cleaner_struct.lock);
+
+    if (cleaner_start() == -1) {
+        return -1;
+    }
 
     thr->stack = NULL;
     thr->stack_sz = 0;
