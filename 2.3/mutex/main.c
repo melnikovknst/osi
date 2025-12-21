@@ -139,7 +139,6 @@ static void *swap_thread(void *arg) {
 		}
 		pthread_mutex_lock(&next->sync);
 
-		int len1 = (int)strlen(prev->value);
 		int len2 = (int)strlen(cur->value);
 		int len3 = (int)strlen(next->value);
 		int need_swap = 0;
@@ -148,7 +147,7 @@ static void *swap_thread(void *arg) {
 			need_swap = 1;
 		else if (type == WORKER_DEC && len2 < len3)
 			need_swap = 1;
-		else if (type == WORKER_EQ && len1 != len2 && len1 == len3)
+		else if (type == WORKER_EQ && len2 != len3)
 			need_swap = 1;
 
 		if (need_swap) {
