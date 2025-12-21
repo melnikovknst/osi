@@ -20,6 +20,7 @@ struct start_pack {
     void  *arg;
     void **ret_slot;
     _Atomic int finished;
+    _Atomic int detached;
 };
 
 struct watch {
@@ -47,13 +48,14 @@ static int tramp(void *p) {
     if (sp && sp->fn)
         rv = sp->fn(sp->arg);
 
-    if (sp && sp->ret_slot)
-       *sp->ret_slot = rv;
-
     if (sp) {
+        int is_detached = atomic_load_explicit(&sp->detached, memory_order_relaxed);
+        if (!is_detached && sp->ret_slot)
+            *sp->ret_slot = rv;
+
         atomic_store_explicit(&sp->finished, 1, memory_order_relaxed);
-        if (sp->ret_slot == NULL) {
-            printf("tramp: detached thr routine done\n");
+
+        if (is_detached) {
             atomic_store_explicit(&cleaner_struct.pending, 1, memory_order_relaxed);
             syscall(SYS_futex, &cleaner_struct.pending, FUTEX_WAKE, 1, NULL, NULL, 0);
         }
@@ -99,6 +101,7 @@ int mythread_create(mythread_t *thr, void *(*start_routine)(void *), void *arg) 
     sp->arg = arg;
     sp->ret_slot = &thr->retval;
     atomic_store_explicit(&sp->finished, 0, memory_order_relaxed);
+    atomic_store_explicit(&sp->detached, 0, memory_order_relaxed);
 
     thr->stack = stk;
     thr->stack_sz = stk_sz;
@@ -288,9 +291,9 @@ int mythread_detach(mythread_t *thr) {
         return -1;
     }
 
-    if (thr->pack) {
-        ((struct start_pack*)thr->pack)->ret_slot = NULL;
-    }
+    struct start_pack *sp = (struct start_pack*)thr->pack;
+    if (sp)
+        atomic_store_explicit(&sp->detached, 1, memory_order_relaxed);
 
     w->ctid = thr->ctid;
     w->stack = thr->stack;
@@ -305,6 +308,9 @@ int mythread_detach(mythread_t *thr) {
     if (cleaner_start() == -1) {
         return -1;
     }
+
+    atomic_store_explicit(&cleaner_struct.pending, 1, memory_order_relaxed);
+    syscall(SYS_futex, &cleaner_struct.pending, FUTEX_WAKE, 1, NULL, NULL, 0);
 
     thr->stack = NULL;
     thr->stack_sz = 0;
