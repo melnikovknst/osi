@@ -16,6 +16,7 @@ static void on_sigint(int s) {
 }
 
 int main() {
+    signal(SIGPIPE, SIG_IGN);
     if (proxy_init(&gpx, PROXY_PORT, WORKERS)) {
         log_err("init failed");
         return 1;

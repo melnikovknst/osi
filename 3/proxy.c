@@ -36,7 +36,13 @@ static int send_all(int fd, const void *buf, size_t n) {
     const char *p = (const char *) buf;
     size_t left = n;
     while (left) {
-        ssize_t w = send(fd, p, left, 0);
+        ssize_t w = send(fd, p, left,
+#ifdef MSG_NOSIGNAL
+         MSG_NOSIGNAL 
+#else
+         0
+#endif
+        );
         if (w < 0) {
             if (errno == EINTR) 
                 continue;
