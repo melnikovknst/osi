@@ -139,7 +139,6 @@ static void *swap_thread(void *arg) {
 		}
 		pthread_rwlock_wrlock(&next->sync);
 
-		int len1 = (int)strlen(prev->value);
 		int len2 = (int)strlen(cur->value);
 		int len3 = (int)strlen(next->value);
 		int need_swap = 0;
