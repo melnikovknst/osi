@@ -6,12 +6,15 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <stdio.h>
+#include <signal.h>
 
 #include "proxy.h"
 #include "config.h"
 #include "net.h"
 #include "http.h"
 #include "logger.h"
+
+extern volatile sig_atomic_t stop_flag;
 
 typedef struct {
     proxy_ctx_t *px;
@@ -81,6 +84,11 @@ static int stream_reader_to_client(record_t *r, int fd) {
 }
 
 static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *req, int client_fd) {
+    if (stop_flag) { 
+        rec_cancel(&px->cache, r);
+        return -1;
+    }
+
     int us = net_connect_host(req->host, req->port, CONNECT_TIMEOUT_MS);
     if (us < 0) {
         rec_cancel(&px->cache, r);
@@ -102,6 +110,12 @@ static int fetch_and_stream(proxy_ctx_t *px, record_t *r, const http_request_t *
     size_t rx = 0; // ← считаем полученные байты
 
     while (1) {
+        if (stop_flag) {
+            safe_close(us);
+            rec_cancel(&px->cache, r);
+            return -1;
+        }
+
         ssize_t n = recv(us, buf, sizeof buf, 0);
         if (n == 0) 
             break;
@@ -228,6 +242,8 @@ void proxy_run_accept_loop(proxy_ctx_t *px) {
         if (cfd < 0) {
             if (errno == EINTR) 
                 continue;
+            if (stop_flag && errno == EBADF) 
+                break;
             log_err("accept: %s", strerror(errno));
             break;
         }

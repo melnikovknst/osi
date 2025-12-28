@@ -8,7 +8,7 @@
 #include "logger.h"
 
 static proxy_ctx_t gpx;
-static volatile sig_atomic_t stop_flag = 0;
+volatile sig_atomic_t stop_flag = 0;
 static void on_sigint(int s) {
     (void)s;
     stop_flag = 1;
